@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PIXEL WORLD v3 — живые течения</title>
+<style>
+  :root { --bg:#f4f1ea; --panel:#faf8f1; --line:#e0dacb; --ink:#1a1a1a; --muted:#8a877f; }
+  * { box-sizing:border-box; image-rendering:pixelated; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink); overflow:hidden;
+    font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .layout { position:fixed; inset:0; width:100%; height:100dvh; margin:0; padding:0; max-width:none;
+    display:block; overflow:hidden; }
+  .side { position:fixed; z-index:10; left:16px; top:16px; bottom:16px; width:320px;
+    min-height:0; overflow-y:auto; overscroll-behavior:contain;
+    background:rgba(250,248,241,.93); border:1px solid var(--line); border-radius:14px; padding:16px 14px;
+    box-shadow:0 20px 60px -20px rgba(0,0,0,.45); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+  .side.hidden { display:none; }
+  #panelToggle { position:fixed; z-index:11; top:16px; right:16px; width:44px; height:44px; padding:0;
+    border-radius:12px; border:1px solid var(--line); background:rgba(250,248,241,.93); color:var(--ink);
+    font-size:18px; cursor:pointer; box-shadow:0 8px 24px -8px rgba(0,0,0,.4); }
+  .side::-webkit-scrollbar { width:8px; }
+  .side::-webkit-scrollbar-thumb { background:var(--line); border-radius:4px; }
+  h1 { font-size:17px; letter-spacing:4px; margin:0 0 4px; }
+  p.sub { margin:0 0 14px; color:var(--muted); font-size:12px; letter-spacing:1px; }
+  .stage { position:absolute; inset:0; overflow:hidden; }
+  .frame { width:100%; height:100%; border:0; border-radius:0; overflow:hidden; background:#000; line-height:0;
+    cursor:grab; }
+  .frame:active { cursor:grabbing; }
+  canvas { width:100%; height:100%; display:block; }
+  .meta { position:fixed; z-index:5; right:70px; bottom:12px; margin:0;
+    display:flex; gap:8px; font-size:11px; flex-wrap:wrap; justify-content:flex-end; }
+  .meta span { background:rgba(0,0,0,.45); color:#fff; padding:5px 12px; border-radius:999px;
+    text-shadow:0 1px 4px rgba(0,0,0,.7); }
+  .bar { display:flex; gap:8px; margin:14px 0 10px; }
+  button { flex:1; font:inherit; font-size:13px; letter-spacing:1px; padding:10px; border-radius:8px;
+    background:var(--ink); color:var(--bg); border:2px solid var(--ink); cursor:pointer;
+    transition:transform .1s ease, filter .15s ease; }
+  button:hover { filter:brightness(1.25); }
+  button.ghost { background:transparent; color:var(--ink); }
+  button.ghost:hover { background:rgba(26,26,26,.06); filter:none; }
+  #full { flex:0 0 54px; }
+  button:active { transform:translateY(1px); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
+  .row { display:grid; grid-template-columns:72px 1fr 36px; align-items:center; gap:8px; font-size:12px; margin:7px 0; }
+  .row output { text-align:right; color:var(--muted); font-variant-numeric:tabular-nums; }
+  input[type=range] { width:100%; accent-color:var(--ink); }
+  select, input[type=text] { font:inherit; font-size:12px; padding:7px 8px; border-radius:8px;
+    border:2px solid var(--ink); background:transparent; color:var(--ink); width:100%; outline:none; }
+  select:disabled { opacity:.35; }
+  .seedrow { display:grid; grid-template-columns:72px 1fr; gap:8px; align-items:center; font-size:12px; margin:8px 0; }
+  .checks { display:flex; gap:14px; font-size:12px; margin:10px 0 2px; flex-wrap:wrap; }
+  .checks label { display:flex; gap:6px; align-items:center; cursor:pointer; }
+  input[type=checkbox] { accent-color:var(--ink); width:15px; height:15px; margin:0; }
+  .stats { font-size:11px; color:var(--muted); margin-top:10px; min-height:16px; }
+  .legend { display:flex; flex-wrap:wrap; gap:5px 10px; margin-top:8px; font-size:11px; color:var(--muted); }
+  .dot { display:inline-block; width:10px; height:10px; margin-right:4px; vertical-align:-1px;
+    border:1px solid #0003; border-radius:3px; }
+  .hint { margin-top:10px; font-size:11px; color:var(--muted); line-height:1.9; }
+  kbd { border:1px solid var(--muted); border-radius:4px; background:rgba(26,26,26,.05);
+    padding:0 5px; font-size:10px; font-family:inherit; }
+  @media(max-width:880px){
+    .side { left:10px; right:10px; top:auto; bottom:10px; width:auto; max-height:44dvh; }
+  }
+</style>
+</head>
+<body>
+<button id="panelToggle" title="скрыть/показать панель">☰</button>
+<div class="layout">
+  <aside class="side" id="side">
+    <h1>PIXEL WORLD v3</h1>
+    <p class="sub">живые течения · утёсы · болота · реки</p>
+    <div class="bar">
+      <button id="gen">⟳ NEW</button>
+      <button id="save" class="ghost">↓ PNG</button>
+      <button id="full" class="ghost narrow">⛶</button>
+    </div>
+    <div class="row"><label>размер</label><input id="size" type="range" min="48" max="160" step="16" value="112"><output id="sizeV"></output></div>
+    <div class="row"><label>море</label><input id="sea" type="range" min="25" max="65" step="1" value="42"><output id="seaV"></output></div>
+    <div class="row"><label>детали</label><input id="scale" type="range" min="2" max="10" step="1" value="5"><output id="scaleV"></output></div>
+    <div class="row"><label>влага</label><input id="moist" type="range" min="-30" max="30" step="1" value="0"><output id="moistV"></output></div>
+    <div class="row"><label>тепло</label><input id="heat" type="range" min="-30" max="30" step="1" value="0"><output id="heatV"></output></div>
+    <div class="row"><label>форма</label><select id="shape">
+      <option value="island">остров</option>
+      <option value="continent" selected>материк</option>
+      <option value="archi">архипелаг</option>
+      <option value="plains">равнина</option>
+    </select><output>◧</output></div>
+    <div class="row"><label>режим</label><select id="mode">
+      <option value="island" selected>остров</option>
+      <option value="inf">бесконечный</option>
+    </select><output>∞</output></div>
+    <div class="seedrow"><label>seed</label><input id="seed" type="text" spellcheck="false"></div>
+    <div class="checks">
+      <label><input type="checkbox" id="rivers" checked> реки</label>
+      <label><input type="checkbox" id="cliffs" checked> утёсы</label>
+    </div>
+    <div class="stats" id="stats"></div>
+    <div class="legend" id="legend"></div>
+    <div class="hint"><kbd>R</kbd> новый · <kbd>S</kbd> PNG · клик — новый мир · в ∞: <kbd>←↑↓→</kbd> или тащи карту</div>
+  </aside>
+  <main class="stage">
+    <div class="frame"><canvas id="c" width="96" height="96"></canvas></div>
+    <div class="meta"><span id="metaL"></span><span id="metaR"></span></div>
+  </main>
+</div>
+<script>
+// ---------- base noise ----------
+function hash2(x,y,s){let h=(s^Math.imul(x,374761393)^Math.imul(y,668265263))>>>0;h=Math.imul(h^(h>>>13),1274126177);return((h^(h>>>16))>>>0)/4294967296}
+function fade(t){return t*t*(3-2*t)}
+function vnoise(x,y,s){
+  const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi;
+  const a=hash2(xi,yi,s),b=hash2(xi+1,yi,s),c=hash2(xi,yi+1,s),d=hash2(xi+1,yi+1,s);
+  const u=fade(xf),v=fade(yf);
+  return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;
+}
+function fbm(x,y,s,oct){let sum=0,amp=.5,f=1,n=0;for(let i=0;i<oct;i++){sum+=amp*vnoise(x*f,y*f,s+i*101);n+=amp;amp*=.5;f*=2}return sum/n}
+
+// ---------- palette ----------
+const P = {
+  deep:'#1e3d68', ocean:'#2b7cc2', shallow:'#54c1d8', river:'#4fb3d9',
+  beach:'#f0dca6', desert:'#e9c85c', dune:'#d9ab4a', savanna:'#c9b84e',
+  steppe:'#a9bd60', meadow:'#6fbf4a', meadow2:'#5cab3e',
+  forest:'#2f8f3a', jungle:'#1f7a33', taiga:'#3f8a68', tundra:'#a3b78e',
+  swamp:'#66853f', swampW:'#3d7a66', mangrove:'#2f6b4f', rock:'#938e85',
+  cliff:'#75655a', cliffL:'#a89c8d', snow:'#f4f8fb', ice:'#c9dfea',
+  lava:'#f2622e', volc:'#54463d', tree:'#1f5c2a', sandD:'#c49a45',
+  foam:'#eaf7f9'
+};
+const NAMES = {deep:'глубина',ocean:'океан',shallow:'мель',river:'река',beach:'пляж',desert:'пустыня',savanna:'саванна',steppe:'степь',meadow:'луг',forest:'лес',jungle:'джунгли',taiga:'тайга',tundra:'тундра',swamp:'болото',mangrove:'мангры',rock:'скалы',cliff:'утёс',snow:'снег',ice:'лёд',volc:'вулкан'};
+
+const cvs=document.getElementById('c'), ctx=cvs.getContext('2d');
+const el=id=>document.getElementById(id);
+const rndSeed=()=>Math.random().toString(36).slice(2,7).toUpperCase();
+function seedInt(s){let h=2166136261;for(const ch of String(s)){h^=ch.codePointAt(0);h=Math.imul(h,16777619)}return h>>>0}
+function hex(h){const c=String(h||'#000000');return [parseInt(c.slice(1,3),16)||0,parseInt(c.slice(3,5),16)||0,parseInt(c.slice(5,7),16)||0]}
+
+// состояние: MAP — статика мира, BASE — готовый кадр
+let MAP=null, BASE=null;
+// бесконечный режим: камера в клетках мира, пересборка чанками при сдвиге
+let cam={x:0,y:0}, builtCam={x:0,y:0}, pDown=null, lastBuild=0;
+const PANKEYS={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0]};
+
+// чанки бесконечного мира 32x32: клетка считается один раз, дальше берётся из LRU-кэша
+const CH=32, CHMAX=24;
+const chunkCache=new Map();
+function getChunk(cx,cy,fp){
+  const key=cx+','+cy;
+  let c=chunkCache.get(key);
+  if(c&&c.sig===fp.sig){ chunkCache.delete(key); chunkCache.set(key,c); return c; }
+  const H=new Float32Array(CH*CH), M=new Float32Array(CH*CH), T=new Float32Array(CH*CH), R=new Float32Array(CH*CH);
+  for(let y=0;y<CH;y++)for(let x=0;x<CH;x++){
+    const wx=cx*CH+x, wy=cy*CH+y, i=y*CH+x;
+    let h=fbm(wx*fp.f+fp.offX,wy*fp.f+fp.offY,fp.S,5);
+    h=h*0.78+0.22*fbm(wx*fp.f*0.13+7.7,wy*fp.f*0.13-3.1,fp.S^0xC071,3);
+    const m=fbm(wx*fp.f*1.8+fp.offY,wy*fp.f*1.8+fp.offX,fp.S^0x9e37,3)+fp.moistOff;
+    const lat=0.5+0.5*Math.sin(wy*0.006+fp.cPh);
+    const tn=fbm(wx*fp.f*1.3+fp.offY*2,wy*fp.f*1.3,fp.S^0x51f7,3);
+    const t=lat*0.55+tn*0.35-h*0.40+fp.heatOff;
+    const rn=fbm(wx*fp.f*1.15+fp.offX*0.5+31,wy*fp.f*1.15+fp.offY*0.5,fp.S^0x51E7,4);
+    const ridge=1-Math.abs(2*rn-1);
+    if(fp.doRivers&&ridge>0.95&&h>fp.sea+0.005&&h<0.82) h-=Math.min(0.06,(ridge-0.95)*1.2); // долина реки
+    H[i]=h; M[i]=m; T[i]=t; R[i]=ridge;
+  }
+  c={H,M,T,R,sig:fp.sig};
+  chunkCache.set(key,c);
+  while(chunkCache.size>CHMAX) chunkCache.delete(chunkCache.keys().next().value);
+  return c;
+}
+
+function buildMaps(){
+  const VHc=+el('size').value, sea=+el('sea').value/100, sc=+el('scale').value;
+  const moistOff=+el('moist').value/100, heatOff=+el('heat').value/100;
+  const shape=el('shape').value;
+  const seedStr=el('seed').value.trim()||rndSeed(); el('seed').value=seedStr;
+  const S=seedInt(seedStr);
+  const doRivers=el('rivers').checked, doCliffs=el('cliffs').checked;
+  const z=1, VH=Math.max(8,+el('size').value); // высота вьюпорта в клетках, 1 клетка = 1 px
+  const aspect=Math.min(3,Math.max(0.5,innerWidth/Math.max(1,innerHeight)));
+  const VW=Math.max(8,Math.min(384,Math.round(VH*aspect))); // ширина — под экран
+  const f=sc/VHc, offX=hash2(1,2,S)*100, offY=hash2(9,7,S)*100;
+  const H=new Float32Array(VW*VH), M=new Float32Array(VW*VH), T=new Float32Array(VW*VH), R=new Float32Array(VW*VH);
+  const inf=el('mode').value==='inf';
+  const ox=inf?Math.round(cam.x):(VHc-VW)/2, oy=inf?Math.round(cam.y):(VHc-VH)/2;
+  const cPh=hash2(0,0,S)*6.283; // фаза климатических поясов из сида
+  const fp={S,f,offX,offY,moistOff,heatOff,cPh,sea,doRivers,sig:seedStr+'|'+sea+'|'+sc+'|'+moistOff+'|'+heatOff};
+  let ccx=1e9,ccy=1e9,cc=null; // текущий чанк при сшивке вьюпорта
+  for(let y=0;y<VH;y++)for(let x=0;x<VW;x++){
+    const i=y*VW+x;
+    let h, m, t, ridge;
+    if(inf){
+      // сшивка из кэшированных чанков: панорама едет — строятся только новые полосы
+      const qx=ox+x, qy=oy+y;
+      const cx=Math.floor(qx/CH), cy=Math.floor(qy/CH);
+      if(cx!==ccx||cy!==ccy){ cc=getChunk(cx,cy,fp); ccx=cx; ccy=cy; }
+      const j=(qy-cy*CH)*CH+(qx-cx*CH);
+      h=cc.H[j]; m=cc.M[j]; t=cc.T[j]; ridge=cc.R[j];
+    } else {
+      const lx=ox+x, ly=oy+y; // окно в центре острова при зуме
+      h=fbm(lx*f+offX,ly*f+offY,S,5);
+      const nx=lx/VHc*2-1, ny=ly/VHc*2-1, d=Math.sqrt(nx*nx+ny*ny)/Math.SQRT2;
+      if(shape==='island') h=h*0.72+0.28-d*d*0.95;
+      else if(shape==='continent') h=h*0.9+0.06-d*0.22;
+      else if(shape==='archi') h=h*0.85-0.02-d*0.12;
+      m=fbm(lx*f*1.8+offY,ly*f*1.8+offX,S^0x9e37,3)+moistOff;
+      const lat=1-Math.abs(ly/VHc-0.5)*2; // 1 экватор, 0 полюса
+      const tn=fbm(lx*f*1.3+offY*2,ly*f*1.3,S^0x51f7,3);
+      t=lat*0.62+tn*0.38-h*0.42+heatOff;
+      const rn=fbm(lx*f*1.15+offX*0.5+31,ly*f*1.15+offY*0.5,S^0x51E7,4);
+      ridge=1-Math.abs(2*rn-1);
+      if(doRivers&&ridge>0.95&&h>sea+0.005&&h<0.82) h-=Math.min(0.06,(ridge-0.95)*1.2); // долина реки
+    }
+    H[i]=h; M[i]=m; T[i]=t; R[i]=ridge;
+  }
+  MAP={VW,VH,z,sea,seedStr,S,H,M,T,R,shape,doRivers,doCliffs,mode:inf?'inf':'island',ox,oy};
+  location.hash=seedStr;
+}
+
+function biomeAt(x,y){
+  const {VW,VH,sea,H,M,T,R}=MAP;
+  const i=y*VW+x, h=H[i], m=M[i], t=T[i], ridge=R[i];
+  const doRivers=MAP.doRivers!==false, doCliffs=MAP.doCliffs!==false;
+  const l=H[y*VW+Math.max(0,x-1)], r=H[y*VW+Math.min(VW-1,x+1)];
+  const u=H[Math.max(0,y-1)*VW+x], d=H[Math.min(VH-1,y+1)*VW+x];
+  const dx=r-l, dy=d-u, slope=Math.sqrt(dx*dx+dy*dy);
+  if(doRivers && ridge>0.958 && h>sea+0.005 && h<0.82) return {b:'river',slope,dx};
+  if(h<sea-0.13) return {b:'deep',slope,dx};
+  if(h<sea-0.045) return {b:'ocean',slope,dx};
+  if(h<sea) return {b:'shallow',slope,dx};
+  if(h<sea+0.022) return {b:'beach',slope,dx};
+  if(h<sea+0.05&&t>0.55&&m<0.62) return {b:'beach',slope,dx}; // тропические пляжи шире
+  if(doCliffs && slope>0.075 && h<0.86) return {b:'cliff',slope,dx};
+  if(h>0.71) return {b:'ice',slope,dx}; // ледники на пиках
+  if(h>0.67) return {b:'snow',slope,dx};
+  if(h>0.60){
+    if(t>0.55 && m<0.4) return {b:'volc',slope,dx}; // вулкан в жарком сухом
+    return {b:'rock',slope,dx};
+  }
+  if(h>0.56) return {b:'rock',slope,dx};
+  if(h<sea+0.07&&m>0.62&&t>0.60) return {b:'mangrove',slope,dx}; // мангры — жаркие топкие низины
+  const low = h<sea+0.07;
+  if(low && m>0.60) return {b:'swamp',slope,dx};
+  if(m>0.68 && h<sea+0.12) return {b:'swamp',slope,dx};
+  if(t<0.30){
+    if(m<0.38) return {b:'tundra',slope,dx};
+    if(m<0.60) return {b:'taiga',slope,dx};
+    return {b:'tundra',slope,dx};
+  }
+  if(t<0.56){
+    if(m<0.34) return {b:'steppe',slope,dx};
+    if(m<0.50) return {b:'meadow',slope,dx};
+    if(m<0.66) return {b:'forest',slope,dx};
+    return {b:'swamp',slope,dx};
+  }
+  if(m<0.32) return {b:'desert',slope,dx};
+  if(m<0.46) return {b:'savanna',slope,dx};
+  if(m<0.62) return {b:'jungle',slope,dx};
+  return {b:'jungle',slope,dx};
+}
+
+// статичный цвет суши/воды
+function colorFor(b,x,y,r,dx){
+  if(!MAP) return P.meadow;
+  switch(b){
+    case 'deep': return P.deep;
+    case 'ocean': return P.ocean;
+    case 'shallow': return P.shallow;
+    case 'river': return MAP.R[y*MAP.VW+x]>0.978?'#6fc6e3':P.river; // стрежень светлее
+    case 'beach':{
+      if(r>0.955) return P.sandD; // ракушки
+      if(hash2(x>>1,y>>1,MAP.S^0x9A17)>0.78) return '#2f7a3d'; // пальмовые рощицы 2x2
+      return P.beach;
+    }
+    case 'desert':{
+      const dune=vnoise(x*0.25,y*0.06,MAP.S^7,2);
+      if(dune>0.62) return P.dune;
+      if(r>0.965) return '#3e8e4f'; // кактусы
+      return P.desert;
+    }
+    case 'savanna': return r>0.85?'#8f8a45':P.savanna;
+    case 'steppe': return ((x+y)%2===0)?P.steppe:'#97a05e';
+    case 'meadow':{
+      const fl=hash2(x*5+3,y*5+1,MAP.S^0xF10E);
+      if(fl>0.958) return ['#ffffff','#f9a8d4','#fde68a'][(x+y)%3]; // цветы
+      return ((x+y)%2===0)?P.meadow:P.meadow2;
+    }
+    case 'forest': return r>0.70?P.tree:P.forest;
+    case 'jungle': return r>0.62?'#1e4d23':P.jungle;
+    case 'taiga': return r>0.70?'#33544a':P.taiga;
+    case 'tundra': return r>0.9?'#7d8b77':P.tundra;
+    case 'swamp':{
+      if(hash2(x*3+9,y*3+1,MAP.S^0x5EED)>0.88) return '#2e6b3c'; // камыш
+      return r>0.72?P.swampW:P.swamp;
+    }
+    case 'mangrove':{
+      if(hash2(x*3+1,y*3+7,MAP.S^0x1A47)>0.80) return '#1e4a38'; // корни
+      return r>0.75?P.swampW:P.mangrove;
+    }
+    case 'rock':{
+      const warm=MAP.T[y*MAP.VW+x]>0.55; // тёплые скалы краснее
+      if(r>0.9) return warm?'#7d6248':'#77736c';
+      return warm?'#9a7a5e':P.rock;
+    }
+    case 'cliff':{
+      const warmC=MAP.T[y*MAP.VW+x]>0.55;
+      if(warmC) return (dx>0)?'#a8906f':'#8a6f56';
+      return (dx>0)?P.cliffL:P.cliff;
+    }
+    case 'snow': return P.snow;
+    case 'ice': return P.ice;
+    case 'volc': return r>0.90?P.lava:P.volc;
+    default: return P.meadow;
+  }
+}
+
+// коды биомов + Bayer 4x4 для ретро-диттеринга переходов
+const BC={deep:1,ocean:2,shallow:3,river:4,beach:5,desert:6,savanna:7,steppe:8,meadow:9,forest:10,jungle:11,taiga:12,tundra:13,swamp:14,rock:15,cliff:16,snow:17,volc:18,mangrove:19,ice:20};
+const BAYER=[0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5];
+function mix3(a,b,t){return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t]}
+const RGBC={};
+function RC(s){return RGBC[s]||(RGBC[s]=hex(s))} // каждый цвет парсится один раз
+
+function renderBase(){
+  if(!MAP) buildMaps();
+  const {VW,VH,S,H,T,sea}=MAP;
+  const W=VW, DH=VH;
+  if(cvs.width!==W||cvs.height!==DH){cvs.width=W;cvs.height=DH}
+  const img=ctx.createImageData(W,DH);
+  const biome=new Uint8Array(VW*VH), water=new Uint8Array(VW*VH); // water: 0 суша 1 deep 2 ocean 3 shallow 4 river
+  const counts={}; let waterN=0;
+  const put=(px,py,c)=>{const o=(py*W+px)*4;img.data[o]=c[0];img.data[o+1]=c[1];img.data[o+2]=c[2];img.data[o+3]=255};
+  // проход 1: плоские базовые цвета + декор
+  for(let y=0;y<VH;y++)for(let x=0;x<VW;x++){
+    const info=biomeAt(x,y);
+    const r=hash2(x,y,S^0x51f);
+    const i=y*VW+x;
+    counts[info.b]=(counts[info.b]||0)+1;
+    water[i]=info.b==='deep'?1:info.b==='ocean'?2:info.b==='shallow'?3:info.b==='river'?4:0;
+    if(water[i])waterN++;
+    biome[i]=BC[info.b]||0;
+    put(x,y,RC(colorFor(info.b,x,y,r,info.dx)));
+  }
+  // проход 2: объём и переходы — свет, AO, берега, слои, кроны, прибой
+  const d=img.data;
+  const sand=hex(P.beach), foam=hex(P.foam), rockC=hex(P.rock), lavaC=hex(P.lava);
+  const lagoon=hex('#6fd8c8'), coral=hex('#f280a6'), wet=hex('#c9ad72');
+  const canopyD=hex('#27522a'), canopyL=hex('#4c8a3f');
+  const lxn=-0.55/0.97, lyn=-0.8/0.97; // свет с северо-запада
+  for(let py=0;py<DH;py++)for(let px=0;px<W;px++){
+    const cx=px, cy=py;
+    const i=cy*VW+cx, o=(py*W+px)*4, b=biome[i], wk=water[i], h=H[i];
+    const xm=cx>0?cx-1:0, xp=cx<VW-1?cx+1:VW-1, ym=cy>0?cy-1:0, yp=cy<VH-1?cy+1:VH-1;
+    const hL=H[cy*VW+xm],hR=H[cy*VW+xp],hU=H[ym*VW+cx],hD=H[yp*VW+cx];
+    const gx=hR-hL, gy=hD-hU;
+    let R1=d[o],G1=d[o+1],B1=d[o+2];
+    if(wk===0){
+      // рельеф: склоны к свету светлее + впадины темнее (AO)
+      const steep=(b===15||b===16);
+      let f=1+(gx*lxn+gy*lyn)*(steep?4.2:2.6);
+      const ao=(hL+hR+hU+hD)*0.25-h;
+      if(ao>0) f*=1-Math.min(0.28,ao*3.2);
+      f=f<0.7?0.7:f>1.22?1.22:f;
+      R1*=f;G1*=f;B1*=f;
+      // снежные кручи — голый камень
+      if(b===17&&(Math.abs(gx)+Math.abs(gy))>0.10){R1=rockC[0]*0.95;G1=rockC[1]*0.95;B1=rockC[2]*0.95;}
+      // утёсы: горизонтальные strata + светлая верхняя кромка
+      if(b===16){
+        if((cy&3)===3){R1*=0.86;G1*=0.86;B1*=0.86;}
+        if(hU<h-0.015){R1*=1.12;G1*=1.12;B1*=1.12;}
+      }
+      // кратер вулкана — лавовая чаша на локальном пике
+      if(b===18&&h>=hL&&h>=hR&&h>=hU&&h>=hD){R1=lavaC[0];G1=lavaC[1];B1=lavaC[2];}
+      // оазис: пальмы в пустыне у реки
+      if(b===6&&(water[cy*VW+xm]===4||water[cy*VW+xp]===4||water[ym*VW+cx]===4||water[yp*VW+cx]===4)&&hash2(px*3+5,py*3+9,S^0x0A51)>0.70){
+        R1=47;G1=122;B1=61;
+      }
+      // кроны леса кластерами 2x2: тень + солнечные пятна
+      if(b===10||b===11){
+        const c=hash2(cx>>1,cy>>1,S^0xCA40);
+        const m=c>0.60?mix3([R1,G1,B1],canopyD,0.65):c<0.30?mix3([R1,G1,B1],canopyL,0.5):null;
+        if(m){R1=m[0];G1=m[1];B1=m[2];}
+      }
+      // песчаная кайма у воды и вдоль низинных рек (с дизерингом)
+      if(b!==5&&h<sea+0.045){
+        const wNear=(hL<sea?1:0)+(hR<sea?1:0)+(hU<sea?1:0)+(hD<sea?1:0);
+        const rivNear=(water[cy*VW+xm]===4||water[cy*VW+xp]===4||water[ym*VW+cx]===4||water[yp*VW+cx]===4);
+        if(wNear>0||rivNear){
+          const f2=1-(h-sea)/0.045, th=BAYER[((py&3)<<2)|(px&3)]/16;
+          if(th<f2*0.85+wNear*0.06){R1=sand[0];G1=sand[1];B1=sand[2];}
+        }
+      }
+      // мокрая кромка: тёмный влажный песок у самой воды
+      if(b!==5&&b!==14&&b!==19&&h<sea+0.022&&(hL<sea||hR<sea||hU<sea||hD<sea)){
+        const m=mix3([R1,G1,B1],wet,0.55);R1=m[0];G1=m[1];B1=m[2];
+      }
+    } else {
+      // водопад: река рядом с высокой скалой — белая пена
+      if(wk===4){
+        const nb=[biome[cy*VW+xm],biome[cy*VW+xp],biome[ym*VW+cx],biome[yp*VW+cx]];
+        const nh=[hL,hR,hU,hD];
+        let fell=false;
+        for(let q=0;q<4;q++) if(nb[q]>=15&&nb[q]<=18&&nh[q]-h>0.04){R1=foam[0];G1=foam[1];B1=foam[2];fell=true;break}
+        // дельта: устье реки в море — песчаная коса
+        if(!fell&&(hL<sea||hR<sea||hU<sea||hD<sea)){const m=mix3([R1,G1,B1],sand,0.6);R1=m[0];G1=m[1];B1=m[2];}
+      }
+      // подводная отмель: в тепле — бирюзовая лагуна
+      if(wk===3){
+        const depth=sea-h;
+        if(depth<0.035){const tgt=T[i]>0.55?lagoon:sand;const m=mix3([R1,G1,B1],tgt,(1-depth/0.035)*0.55);R1=m[0];G1=m[1];B1=m[2];}
+        // кораллы у пляжей
+        if((biome[cy*VW+xm]===5||biome[cy*VW+xp]===5||biome[ym*VW+cx]===5||biome[yp*VW+cx]===5)&&hash2(cx*7+2,cy*7+4,S^0xC0AA)>0.90){
+          const m=mix3([R1,G1,B1],coral,0.85);R1=m[0];G1=m[1];B1=m[2];
+        }
+      }
+      // глубина темнеет
+      if(wk===1){const dd=Math.min(1,(sea-h)*5);const f=1-dd*0.22;R1*=f;G1*=f;B1*=f;}
+      // прибой: сплошная тонкая линия там, где вода касается суши (без пятен)
+      if((wk===2||wk===3)&&(hL>=sea||hR>=sea||hU>=sea||hD>=sea)){R1=foam[0];G1=foam[1];B1=foam[2];}
+    }
+    d[o]=R1;d[o+1]=G1;d[o+2]=B1;
+  }
+  ctx.putImageData(img,0,0);
+  BASE={img,water,biome};
+  const total=VW*VH;
+  el('stats').textContent=Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5)
+    .map(([k,v])=>`${NAMES[k]||k} ${Math.round(v/total*100)}%`).join(' · ');
+  el('metaL').textContent=MAP.mode==='inf'?`seed ${MAP.seedStr} · ∞`:`seed ${MAP.seedStr} · ${MAP.shape}`;
+  el('metaR').textContent=MAP.mode==='inf'?`${VW}×${VH} · x ${MAP.ox} y ${MAP.oy}`:`${VW}×${VH} · вода ${Math.round(waterN/total*100)}%`;
+}
+
+// бесконечный режим: камера едет стрелками/перетаскиванием, чанки досчитываются
+function maybeRebuild(){
+  if(!MAP||el('mode').value!=='inf') return;
+  const dx=cam.x-builtCam.x, dy=cam.y-builtCam.y, now=performance.now();
+  if(dx*dx+dy*dy<4||now-lastBuild<140) return;
+  buildMaps(); renderBase(); builtCam={x:cam.x,y:cam.y}; lastBuild=now;
+}
+
+// течение удалено: вода статична, кадр рисуется один раз в renderBase
+
+let genT=0;
+function genSoon(){clearTimeout(genT);genT=setTimeout(generate,120)} // дебаунс слайдеров
+function generate(){ buildMaps(); renderBase(); builtCam={x:cam.x,y:cam.y}; lastBuild=performance.now(); }
+
+function save(){
+  const k=8,out=document.createElement('canvas');
+  out.width=cvs.width*k;out.height=cvs.height*k;
+  const o=out.getContext('2d');o.imageSmoothingEnabled=false;
+  o.drawImage(cvs,0,0,out.width,out.height);
+  const a=document.createElement('a');
+  a.download='pixel-world-'+el('seed').value+'.png';a.href=out.toDataURL();a.click();
+}
+
+// легенда (статичная палитра — не зависит от MAP)
+const LEGEND_COLORS={ocean:P.ocean,shallow:P.shallow,river:P.river,beach:P.beach,desert:P.desert,savanna:P.savanna,meadow:P.meadow,forest:P.forest,jungle:P.jungle,taiga:P.taiga,tundra:P.tundra,swamp:P.swamp,mangrove:P.mangrove,cliff:P.cliff,rock:P.rock,snow:P.snow,ice:P.ice,volc:P.volc};
+el('legend').innerHTML=Object.keys(LEGEND_COLORS)
+  .map(k=>`<span><i class="dot" style="background:${LEGEND_COLORS[k]}"></i>${NAMES[k]}</span>`).join('');
+
+// события
+for(const [id,out] of [['size','sizeV'],['sea','seaV'],['scale','scaleV'],['moist','moistV'],['heat','heatV']]){
+  const s=()=>el(out).textContent=el(id).value;
+  el(id).addEventListener('input',()=>{s();genSoon()});s();
+}
+for(const id of ['shape','rivers','cliffs']) el(id).addEventListener('change',generate);
+el('mode').addEventListener('change',()=>{cam={x:0,y:0};generate()});
+el('gen').onclick=()=>{el('seed').value=rndSeed();generate()};
+el('save').onclick=save;
+el('full').onclick=()=>{if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen().catch(()=>{})};
+el('seed').addEventListener('change',generate);
+el('panelToggle').onclick=()=>el('side').classList.toggle('hidden');
+addEventListener('resize',()=>genSoon());
+// клик — новый мир; перетаскивание в ∞ — полёт камеры
+cvs.addEventListener('pointerdown',e=>{pDown={x:e.clientX,y:e.clientY,moved:false};try{cvs.setPointerCapture(e.pointerId)}catch(_){}});
+cvs.addEventListener('pointermove',e=>{
+  if(!pDown) return;
+  const dx=e.clientX-pDown.x, dy=e.clientY-pDown.y;
+  if(Math.abs(dx)+Math.abs(dy)>4) pDown.moved=true;
+  if(pDown.moved&&el('mode').value==='inf'&&MAP){
+    const cell=cvs.clientWidth/MAP.VW||8;
+    cam.x-=dx/cell; cam.y-=dy/cell; maybeRebuild();
+    pDown.x=e.clientX; pDown.y=e.clientY;
+  }
+});
+cvs.addEventListener('pointerup',()=>{if(pDown&&!pDown.moved){el('seed').value=rndSeed();generate()}pDown=null});
+addEventListener('keydown',e=>{
+  const tag=e.target.tagName;
+  if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA')return;
+  if(PANKEYS[e.key]){e.preventDefault();if(el('mode').value==='inf'&&MAP){const v=PANKEYS[e.key],st=MAP.VW*0.15;cam.x+=v[0]*st;cam.y+=v[1]*st;maybeRebuild()}return}
+  if(['r','R',' ','к','К'].includes(e.key)){e.preventDefault();el('seed').value=rndSeed();generate()}
+  if(['s','S','ы','Ы'].includes(e.key))save();
+});
+
+el('seed').value=location.hash.slice(1)||rndSeed();
+generate();
+</script>
+</body>
+</html>

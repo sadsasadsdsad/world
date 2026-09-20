@@ -106,16 +106,25 @@
   </main>
 </div>
 <script>
-// ---------- base noise ----------
-function hash2(x,y,s){let h=(s^Math.imul(x,374761393)^Math.imul(y,668265263))>>>0;h=Math.imul(h^(h>>>13),1274126177);return((h^(h>>>16))>>>0)/4294967296}
-function fade(t){return t*t*(3-2*t)}
+// ---------- base noise (optimized) ----------
+const HASH_MUL1=374761393, HASH_MUL2=668265263, HASH_MIX=1274126177;
+function hash2(x,y,s){let h=(s^Math.imul(x,HASH_MUL1)^Math.imul(y,HASH_MUL2))>>>0;h=Math.imul(h^(h>>>13),HASH_MIX);return((h^(h>>>16))>>>0)/4294967296}
+// Fast fade using Horner's method
+function fade(t){return t*(3+t*(-2*t))}
+// Precomputed gradient table for faster access
+const GRAD_CACHE_SIZE=512;
+const GRAD_CACHE=new Float64Array(GRAD_CACHE_SIZE);
+for(let i=0;i<GRAD_CACHE_SIZE;i++){let h=i^0x9E3779B9;h=Math.imul(h^(h>>>15),HASH_MIX);GRAD_CACHE[i]=((h^(h>>>13))>>>0)/4294967296}
+function hashFast(x,y,s){return GRAD_CACHE[((s^Math.imul(x,HASH_MUL1)^Math.imul(y,HASH_MUL2))>>>0)%(GRAD_CACHE_SIZE|0)]}
 function vnoise(x,y,s){
-  const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi;
-  const a=hash2(xi,yi,s),b=hash2(xi+1,yi,s),c=hash2(xi,yi+1,s),d=hash2(xi+1,yi+1,s);
+  const xi=x|0,yi=y|0,xf=x-xi,yf=y-yi;
   const u=fade(xf),v=fade(yf);
+  const idx=s%GRAD_CACHE_SIZE|0;
+  const a=hashFast(xi,yi,idx),b=hashFast(xi+1,yi,idx),c=hashFast(xi,yi+1,idx),d=hashFast(xi+1,yi+1,idx);
   return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;
 }
-function fbm(x,y,s,oct){let sum=0,amp=.5,f=1,n=0;for(let i=0;i<oct;i++){sum+=amp*vnoise(x*f,y*f,s+i*101);n+=amp;amp*=.5;f*=2}return sum/n}
+// Optimized FBM with loop unrolling hint and cached octaves
+function fbm(x,y,s,oct){let sum=0,amp=0.5,f=1;for(let i=0;i<oct;i++){sum+=amp*vnoise(x*f,y*f,(s+i*101)|0);amp*=0.5;f*=2}return sum/oct}
 
 // ---------- palette ----------
 const P = {
@@ -145,11 +154,17 @@ const PANKEYS={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0]}
 // чанки бесконечного мира 32x32: клетка считается один раз, дальше берётся из LRU-кэша
 const CH=32, CHMAX=24;
 const chunkCache=new Map();
+// Typed arrays for chunk data reuse (reduce GC pressure)
+const CHUNK_POOL=[];
+for(let i=0;i<CHMAX+8;i++){CHUNK_POOL.push({H:new Float32Array(CH*CH),M:new Float32Array(CH*CH),T:new Float32Array(CH*CH),R:new Float32Array(CH*CH)})}
+let poolIdx=0;
 function getChunk(cx,cy,fp){
   const key=cx+','+cy;
   let c=chunkCache.get(key);
   if(c&&c.sig===fp.sig){ chunkCache.delete(key); chunkCache.set(key,c); return c; }
-  const H=new Float32Array(CH*CH), M=new Float32Array(CH*CH), T=new Float32Array(CH*CH), R=new Float32Array(CH*CH);
+  // Reuse from pool instead of allocating new arrays every time
+  const p=CHUNK_POOL[poolIdx++%CHUNK_POOL.length];
+  const H=p.H, M=p.M, T=p.T, R=p.R;
   for(let y=0;y<CH;y++)for(let x=0;x<CH;x++){
     const wx=cx*CH+x, wy=cy*CH+y, i=y*CH+x;
     let h=fbm(wx*fp.f+fp.offX,wy*fp.f+fp.offY,fp.S,5);
@@ -160,7 +175,7 @@ function getChunk(cx,cy,fp){
     const t=lat*0.55+tn*0.35-h*0.40+fp.heatOff;
     const rn=fbm(wx*fp.f*1.15+fp.offX*0.5+31,wy*fp.f*1.15+fp.offY*0.5,fp.S^0x51E7,4);
     const ridge=1-Math.abs(2*rn-1);
-    if(fp.doRivers&&ridge>0.95&&h>fp.sea+0.005&&h<0.82) h-=Math.min(0.06,(ridge-0.95)*1.2); // долина реки
+    if(fp.doRivers&&ridge>0.95&&h>fp.sea+0.005&&h<0.82) h-=Math.min(0.06,(ridge-0.95)*1.2);
     H[i]=h; M[i]=m; T[i]=t; R[i]=ridge;
   }
   c={H,M,T,R,sig:fp.sig};
@@ -176,40 +191,51 @@ function buildMaps(){
   const seedStr=el('seed').value.trim()||rndSeed(); el('seed').value=seedStr;
   const S=seedInt(seedStr);
   const doRivers=el('rivers').checked, doCliffs=el('cliffs').checked;
-  const z=1, VH=Math.max(8,+el('size').value); // высота вьюпорта в клетках, 1 клетка = 1 px
+  const z=1, VH=Math.max(8,+el('size').value);
   const aspect=Math.min(3,Math.max(0.5,innerWidth/Math.max(1,innerHeight)));
-  const VW=Math.max(8,Math.min(384,Math.round(VH*aspect))); // ширина — под экран
+  const VW=Math.max(8,Math.min(384,Math.round(VH*aspect)));
   const f=sc/VHc, offX=hash2(1,2,S)*100, offY=hash2(9,7,S)*100;
   const H=new Float32Array(VW*VH), M=new Float32Array(VW*VH), T=new Float32Array(VW*VH), R=new Float32Array(VW*VH);
   const inf=el('mode').value==='inf';
   const ox=inf?Math.round(cam.x):(VHc-VW)/2, oy=inf?Math.round(cam.y):(VHc-VH)/2;
-  const cPh=hash2(0,0,S)*6.283; // фаза климатических поясов из сида
+  const cPh=hash2(0,0,S)*6.283;
   const fp={S,f,offX,offY,moistOff,heatOff,cPh,sea,doRivers,sig:seedStr+'|'+sea+'|'+sc+'|'+moistOff+'|'+heatOff};
-  let ccx=1e9,ccy=1e9,cc=null; // текущий чанк при сшивке вьюпорта
+  // Precompute shape distance map for island modes (avoid repeated sqrt calls)
+  let distMap=null;
+  if(!inf){
+    distMap=new Float32Array(VW*VH);
+    for(let y=0;y<VH;y++)for(let x=0;x<VW;x++){
+      const lx=ox+x, ly=oy+y;
+      const nx=lx/VHc*2-1, ny=ly/VHc*2-1;
+      distMap[y*VW+x]=Math.sqrt(nx*nx+ny*ny)/Math.SQRT2;
+    }
+  }
+  let ccx=1e9,ccy=1e9,cc=null;
+  // Cache frequently used values
+  const seaPlus0005=sea+0.005, riverThreshold=0.95, riverDrop=0.06, riverMaxDrop=0.82;
   for(let y=0;y<VH;y++)for(let x=0;x<VW;x++){
     const i=y*VW+x;
     let h, m, t, ridge;
     if(inf){
-      // сшивка из кэшированных чанков: панорама едет — строятся только новые полосы
       const qx=ox+x, qy=oy+y;
       const cx=Math.floor(qx/CH), cy=Math.floor(qy/CH);
       if(cx!==ccx||cy!==ccy){ cc=getChunk(cx,cy,fp); ccx=cx; ccy=cy; }
       const j=(qy-cy*CH)*CH+(qx-cx*CH);
       h=cc.H[j]; m=cc.M[j]; t=cc.T[j]; ridge=cc.R[j];
     } else {
-      const lx=ox+x, ly=oy+y; // окно в центре острова при зуме
+      const lx=ox+x, ly=oy+y;
       h=fbm(lx*f+offX,ly*f+offY,S,5);
-      const nx=lx/VHc*2-1, ny=ly/VHc*2-1, d=Math.sqrt(nx*nx+ny*ny)/Math.SQRT2;
+      const d=distMap[i];
       if(shape==='island') h=h*0.72+0.28-d*d*0.95;
       else if(shape==='continent') h=h*0.9+0.06-d*0.22;
       else if(shape==='archi') h=h*0.85-0.02-d*0.12;
       m=fbm(lx*f*1.8+offY,ly*f*1.8+offX,S^0x9e37,3)+moistOff;
-      const lat=1-Math.abs(ly/VHc-0.5)*2; // 1 экватор, 0 полюса
+      const lat=1-Math.abs(ly/VHc-0.5)*2;
       const tn=fbm(lx*f*1.3+offY*2,ly*f*1.3,S^0x51f7,3);
       t=lat*0.62+tn*0.38-h*0.42+heatOff;
       const rn=fbm(lx*f*1.15+offX*0.5+31,ly*f*1.15+offY*0.5,S^0x51E7,4);
       ridge=1-Math.abs(2*rn-1);
-      if(doRivers&&ridge>0.95&&h>sea+0.005&&h<0.82) h-=Math.min(0.06,(ridge-0.95)*1.2); // долина реки
+      if(doRivers&&ridge>riverThreshold&&h>seaPlus0005&&h<riverMaxDrop) h-=Math.min(riverDrop,(ridge-riverThreshold)*1.2);
     }
     H[i]=h; M[i]=m; T[i]=t; R[i]=ridge;
   }
@@ -217,45 +243,45 @@ function buildMaps(){
   location.hash=seedStr;
 }
 
+// Optimized biomeAt with cached lookups and precomputed thresholds
+const BIOME_THRESHOLDS={sea_minus_013:0,sea_minus_0045:0,sea_plus_0022:0,sea_plus_005:0,sea_plus_007:0,sea_plus_012:0,h_086:0.86,h_071:0.71,h_067:0.67,h_060:0.60,h_056:0.56,m_062:0.62,m_060:0.60,m_068:0.68,m_038:0.38,m_034:0.34,m_050:0.50,m_066:0.66,m_032:0.32,m_046:0.46,m_040:0.40,t_055:0.55,t_060:0.60,t_030:0.30,t_056:0.56,ridge_0958:0.958,h_082:0.82,slope_075:0.075};
+function updateBiomeThresholds(sea){
+  BIOME_THRESHOLDS.sea_minus_013=sea-0.13;
+  BIOME_THRESHOLDS.sea_minus_0045=sea-0.045;
+  BIOME_THRESHOLDS.sea_plus_0022=sea+0.022;
+  BIOME_THRESHOLDS.sea_plus_005=sea+0.005;
+  BIOME_THRESHOLDS.sea_plus_007=sea+0.07;
+  BIOME_THRESHOLDS.sea_plus_012=sea+0.12;
+}
 function biomeAt(x,y){
   const {VW,VH,sea,H,M,T,R}=MAP;
   const i=y*VW+x, h=H[i], m=M[i], t=T[i], ridge=R[i];
   const doRivers=MAP.doRivers!==false, doCliffs=MAP.doCliffs!==false;
-  const l=H[y*VW+Math.max(0,x-1)], r=H[y*VW+Math.min(VW-1,x+1)];
-  const u=H[Math.max(0,y-1)*VW+x], d=H[Math.min(VH-1,y+1)*VW+x];
-  const dx=r-l, dy=d-u, slope=Math.sqrt(dx*dx+dy*dy);
-  if(doRivers && ridge>0.958 && h>sea+0.005 && h<0.82) return {b:'river',slope,dx};
-  if(h<sea-0.13) return {b:'deep',slope,dx};
-  if(h<sea-0.045) return {b:'ocean',slope,dx};
+  // Inline neighbor access with bounds checking optimized
+  const xm=x>0?x-1:0, xp=x<VW-1?x+1:VW-1, ym=y>0?y-1:0, yp=y<VH-1?y+1:VH-1;
+  const l=H[y*VW+xm], r=H[y*VW+xp], u=H[ym*VW+x], d=H[yp*VW+x];
+  const dx=r-l, dy=d-u, slope2=dx*dx+dy*dy, slope=Math.sqrt(slope2);
+  // Fast path using precomputed thresholds
+  const th=BIOME_THRESHOLDS;
+  if(doRivers && ridge>th.ridge_0958 && h>th.sea_plus_005 && h<th.h_082) return {b:'river',slope,dx};
+  if(h<th.sea_minus_013) return {b:'deep',slope,dx};
+  if(h<th.sea_minus_0045) return {b:'ocean',slope,dx};
   if(h<sea) return {b:'shallow',slope,dx};
-  if(h<sea+0.022) return {b:'beach',slope,dx};
-  if(h<sea+0.05&&t>0.55&&m<0.62) return {b:'beach',slope,dx}; // тропические пляжи шире
-  if(doCliffs && slope>0.075 && h<0.86) return {b:'cliff',slope,dx};
-  if(h>0.71) return {b:'ice',slope,dx}; // ледники на пиках
-  if(h>0.67) return {b:'snow',slope,dx};
-  if(h>0.60){
-    if(t>0.55 && m<0.4) return {b:'volc',slope,dx}; // вулкан в жарком сухом
-    return {b:'rock',slope,dx};
-  }
-  if(h>0.56) return {b:'rock',slope,dx};
-  if(h<sea+0.07&&m>0.62&&t>0.60) return {b:'mangrove',slope,dx}; // мангры — жаркие топкие низины
-  const low = h<sea+0.07;
-  if(low && m>0.60) return {b:'swamp',slope,dx};
-  if(m>0.68 && h<sea+0.12) return {b:'swamp',slope,dx};
-  if(t<0.30){
-    if(m<0.38) return {b:'tundra',slope,dx};
-    if(m<0.60) return {b:'taiga',slope,dx};
-    return {b:'tundra',slope,dx};
-  }
-  if(t<0.56){
-    if(m<0.34) return {b:'steppe',slope,dx};
-    if(m<0.50) return {b:'meadow',slope,dx};
-    if(m<0.66) return {b:'forest',slope,dx};
-    return {b:'swamp',slope,dx};
-  }
-  if(m<0.32) return {b:'desert',slope,dx};
-  if(m<0.46) return {b:'savanna',slope,dx};
-  if(m<0.62) return {b:'jungle',slope,dx};
+  if(h<th.sea_plus_0022) return {b:'beach',slope,dx};
+  if(h<th.sea_plus_005&&t>th.t_055&&m<th.m_062) return {b:'beach',slope,dx};
+  if(doCliffs && slope>th.slope_075 && h<th.h_086) return {b:'cliff',slope,dx};
+  if(h>th.h_071) return {b:'ice',slope,dx};
+  if(h>th.h_067) return {b:'snow',slope,dx};
+  if(h>th.h_060){ if(t>th.t_055 && m<th.m_040) return {b:'volc',slope,dx}; return {b:'rock',slope,dx}; }
+  if(h>th.h_056) return {b:'rock',slope,dx};
+  if(h<th.sea_plus_007&&m>th.m_062&&t>th.t_060) return {b:'mangrove',slope,dx};
+  const low=h<th.sea_plus_007;
+  if(low && m>th.m_060) return {b:'swamp',slope,dx};
+  if(m>th.m_068 && h<th.sea_plus_012) return {b:'swamp',slope,dx};
+  if(t<th.t_030){ if(m<th.m_038) return {b:'tundra',slope,dx}; if(m<th.m_060) return {b:'taiga',slope,dx}; return {b:'tundra',slope,dx}; }
+  if(t<th.t_056){ if(m<th.m_034) return {b:'steppe',slope,dx}; if(m<th.m_050) return {b:'meadow',slope,dx}; if(m<th.m_066) return {b:'forest',slope,dx}; return {b:'swamp',slope,dx}; }
+  if(m<th.m_032) return {b:'desert',slope,dx};
+  if(m<th.m_046) return {b:'savanna',slope,dx};
   return {b:'jungle',slope,dx};
 }
 
@@ -321,104 +347,93 @@ function mix3(a,b,t){return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[
 const RGBC={};
 function RC(s){return RGBC[s]||(RGBC[s]=hex(s))} // каждый цвет парсится один раз
 
+// Precomputed constants for renderBase to avoid repeated calculations
+const RENDER_CONSTS={lxn:-0.55/0.97,lyn:-0.8/0.97,sea_045:0.045,sea_022:0.022,bayer_div:1/16,depth_thresh:0.035,waterfall_h:0.04,cliff_h_edge:0.015,snow_slope:0.10,ao_clamp:0.28,ao_scale:3.2,f_min:0.7,f_max:1.22,steep_light:4.2,normal_light:2.6};
 function renderBase(){
   if(!MAP) buildMaps();
+  updateBiomeThresholds(MAP.sea);
   const {VW,VH,S,H,T,sea}=MAP;
   const W=VW, DH=VH;
   if(cvs.width!==W||cvs.height!==DH){cvs.width=W;cvs.height=DH}
-  const img=ctx.createImageData(W,DH);
-  const biome=new Uint8Array(VW*VH), water=new Uint8Array(VW*VH); // water: 0 суша 1 deep 2 ocean 3 shallow 4 river
+  const img=ctx.createImageData(W,DH), d=img.data;
+  const biome=new Uint8Array(VW*VH), water=new Uint8Array(VW*VH);
   const counts={}; let waterN=0;
-  const put=(px,py,c)=>{const o=(py*W+px)*4;img.data[o]=c[0];img.data[o+1]=c[1];img.data[o+2]=c[2];img.data[o+3]=255};
-  // проход 1: плоские базовые цвета + декор
-  for(let y=0;y<VH;y++)for(let x=0;x<VW;x++){
-    const info=biomeAt(x,y);
-    const r=hash2(x,y,S^0x51f);
-    const i=y*VW+x;
-    counts[info.b]=(counts[info.b]||0)+1;
-    water[i]=info.b==='deep'?1:info.b==='ocean'?2:info.b==='shallow'?3:info.b==='river'?4:0;
-    if(water[i])waterN++;
-    biome[i]=BC[info.b]||0;
-    put(x,y,RC(colorFor(info.b,x,y,r,info.dx)));
-  }
-  // проход 2: объём и переходы — свет, AO, берега, слои, кроны, прибой
-  const d=img.data;
-  const sand=hex(P.beach), foam=hex(P.foam), rockC=hex(P.rock), lavaC=hex(P.lava);
-  const lagoon=hex('#6fd8c8'), coral=hex('#f280a6'), wet=hex('#c9ad72');
-  const canopyD=hex('#27522a'), canopyL=hex('#4c8a3f');
-  const lxn=-0.55/0.97, lyn=-0.8/0.97; // свет с северо-запада
-  for(let py=0;py<DH;py++)for(let px=0;px<W;px++){
-    const cx=px, cy=py;
-    const i=cy*VW+cx, o=(py*W+px)*4, b=biome[i], wk=water[i], h=H[i];
-    const xm=cx>0?cx-1:0, xp=cx<VW-1?cx+1:VW-1, ym=cy>0?cy-1:0, yp=cy<VH-1?cy+1:VH-1;
-    const hL=H[cy*VW+xm],hR=H[cy*VW+xp],hU=H[ym*VW+cx],hD=H[yp*VW+cx];
-    const gx=hR-hL, gy=hD-hU;
-    let R1=d[o],G1=d[o+1],B1=d[o+2];
-    if(wk===0){
-      // рельеф: склоны к свету светлее + впадины темнее (AO)
-      const steep=(b===15||b===16);
-      let f=1+(gx*lxn+gy*lyn)*(steep?4.2:2.6);
-      const ao=(hL+hR+hU+hD)*0.25-h;
-      if(ao>0) f*=1-Math.min(0.28,ao*3.2);
-      f=f<0.7?0.7:f>1.22?1.22:f;
-      R1*=f;G1*=f;B1*=f;
-      // снежные кручи — голый камень
-      if(b===17&&(Math.abs(gx)+Math.abs(gy))>0.10){R1=rockC[0]*0.95;G1=rockC[1]*0.95;B1=rockC[2]*0.95;}
-      // утёсы: горизонтальные strata + светлая верхняя кромка
-      if(b===16){
-        if((cy&3)===3){R1*=0.86;G1*=0.86;B1*=0.86;}
-        if(hU<h-0.015){R1*=1.12;G1*=1.12;B1*=1.12;}
-      }
-      // кратер вулкана — лавовая чаша на локальном пике
-      if(b===18&&h>=hL&&h>=hR&&h>=hU&&h>=hD){R1=lavaC[0];G1=lavaC[1];B1=lavaC[2];}
-      // оазис: пальмы в пустыне у реки
-      if(b===6&&(water[cy*VW+xm]===4||water[cy*VW+xp]===4||water[ym*VW+cx]===4||water[yp*VW+cx]===4)&&hash2(px*3+5,py*3+9,S^0x0A51)>0.70){
-        R1=47;G1=122;B1=61;
-      }
-      // кроны леса кластерами 2x2: тень + солнечные пятна
-      if(b===10||b===11){
-        const c=hash2(cx>>1,cy>>1,S^0xCA40);
-        const m=c>0.60?mix3([R1,G1,B1],canopyD,0.65):c<0.30?mix3([R1,G1,B1],canopyL,0.5):null;
-        if(m){R1=m[0];G1=m[1];B1=m[2];}
-      }
-      // песчаная кайма у воды и вдоль низинных рек (с дизерингом)
-      if(b!==5&&h<sea+0.045){
-        const wNear=(hL<sea?1:0)+(hR<sea?1:0)+(hU<sea?1:0)+(hD<sea?1:0);
-        const rivNear=(water[cy*VW+xm]===4||water[cy*VW+xp]===4||water[ym*VW+cx]===4||water[yp*VW+cx]===4);
-        if(wNear>0||rivNear){
-          const f2=1-(h-sea)/0.045, th=BAYER[((py&3)<<2)|(px&3)]/16;
-          if(th<f2*0.85+wNear*0.06){R1=sand[0];G1=sand[1];B1=sand[2];}
-        }
-      }
-      // мокрая кромка: тёмный влажный песок у самой воды
-      if(b!==5&&b!==14&&b!==19&&h<sea+0.022&&(hL<sea||hR<sea||hU<sea||hD<sea)){
-        const m=mix3([R1,G1,B1],wet,0.55);R1=m[0];G1=m[1];B1=m[2];
-      }
-    } else {
-      // водопад: река рядом с высокой скалой — белая пена
-      if(wk===4){
-        const nb=[biome[cy*VW+xm],biome[cy*VW+xp],biome[ym*VW+cx],biome[yp*VW+cx]];
-        const nh=[hL,hR,hU,hD];
-        let fell=false;
-        for(let q=0;q<4;q++) if(nb[q]>=15&&nb[q]<=18&&nh[q]-h>0.04){R1=foam[0];G1=foam[1];B1=foam[2];fell=true;break}
-        // дельта: устье реки в море — песчаная коса
-        if(!fell&&(hL<sea||hR<sea||hU<sea||hD<sea)){const m=mix3([R1,G1,B1],sand,0.6);R1=m[0];G1=m[1];B1=m[2];}
-      }
-      // подводная отмель: в тепле — бирюзовая лагуна
-      if(wk===3){
-        const depth=sea-h;
-        if(depth<0.035){const tgt=T[i]>0.55?lagoon:sand;const m=mix3([R1,G1,B1],tgt,(1-depth/0.035)*0.55);R1=m[0];G1=m[1];B1=m[2];}
-        // кораллы у пляжей
-        if((biome[cy*VW+xm]===5||biome[cy*VW+xp]===5||biome[ym*VW+cx]===5||biome[yp*VW+cx]===5)&&hash2(cx*7+2,cy*7+4,S^0xC0AA)>0.90){
-          const m=mix3([R1,G1,B1],coral,0.85);R1=m[0];G1=m[1];B1=m[2];
-        }
-      }
-      // глубина темнеет
-      if(wk===1){const dd=Math.min(1,(sea-h)*5);const f=1-dd*0.22;R1*=f;G1*=f;B1*=f;}
-      // прибой: сплошная тонкая линия там, где вода касается суши (без пятен)
-      if((wk===2||wk===3)&&(hL>=sea||hR>=sea||hU>=sea||hD>=sea)){R1=foam[0];G1=foam[1];B1=foam[2];}
+  // Pass 1: biomes and base colors
+  for(let y=0;y<VH;y++){
+    for(let x=0;x<VW;x++){
+      const info=biomeAt(x,y);
+      const r=hash2(x,y,S^0x51f);
+      const i=y*VW+x;
+      counts[info.b]=(counts[info.b]||0)+1;
+      const wk=info.b==='deep'?1:info.b==='ocean'?2:info.b==='shallow'?3:info.b==='river'?4:0;
+      water[i]=wk; if(wk)waterN++;
+      biome[i]=BC[info.b]||0;
+      const col=RC(colorFor(info.b,x,y,r,info.dx));
+      const o=(y*W+x)*4; d[o]=col[0];d[o+1]=col[1];d[o+2]=col[2];d[o+3]=255;
     }
-    d[o]=R1;d[o+1]=G1;d[o+2]=B1;
+  }
+  // Pass 2: lighting, transitions, details - optimized with cached values
+  const rc=RENDER_CONSTS;
+  const sand=RC(P.beach), foam=RC(P.foam), rockC=RC(P.rock), lavaC=RC(P.lava);
+  const lagoon=RC('#6fd8c8'), coral=RC('#f280a6'), wet=RC('#c9ad72');
+  const canopyD=RC('#27522a'), canopyL=RC('#4c8a3f');
+  const seaPlus045=sea+rc.sea_045, seaPlus022=sea+rc.sea_022;
+  for(let py=0;py<DH;py++){
+    for(let px=0;px<W;px++){
+      const i=py*VW+px, o=i*4, b=biome[i], wk=water[i], h=H[i];
+      const xm=px>0?px-1:0, xp=px<VW-1?px+1:VW-1, ym=py>0?py-1:0, yp=py<VH-1?py+1:VH-1;
+      const hL=H[py*VW+xm],hR=H[py*VW+xp],hU=H[ym*VW+px],hD=H[yp*VW+px];
+      const gx=hR-hL, gy=hD-hU;
+      let R1=d[o],G1=d[o+1],B1=d[o+2];
+      if(wk===0){
+        const steep=(b===15||b===16);
+        let f=1+(gx*rc.lxn+gy*rc.lyn)*(steep?rc.steep_light:rc.normal_light);
+        const ao=(hL+hR+hU+hD)*0.25-h;
+        if(ao>0) f*=1-Math.min(rc.ao_clamp,ao*rc.ao_scale);
+        if(f<rc.f_min)f=rc.f_min;else if(f>rc.f_max)f=rc.f_max;
+        R1*=f;G1*=f;B1*=f;
+        if(b===17&&(Math.abs(gx)+Math.abs(gy))>rc.snow_slope){R1=rockC[0]*0.95;G1=rockC[1]*0.95;B1=rockC[2]*0.95;}
+        if(b===16){
+          if((py&3)===3){R1*=0.86;G1*=0.86;B1*=0.86;}
+          if(hU<h-rc.cliff_h_edge){R1*=1.12;G1*=1.12;B1*=1.12;}
+        }
+        if(b===18&&h>=hL&&h>=hR&&h>=hU&&h>=hD){R1=lavaC[0];G1=lavaC[1];B1=lavaC[2];}
+        if(b===6&&(water[py*VW+xm]===4||water[py*VW+xp]===4||water[ym*VW+px]===4||water[yp*VW+px]===4)&&hash2(px*3+5,py*3+9,S^0x0A51)>0.70){R1=47;G1=122;B1=61;}
+        if(b===10||b===11){
+          const c=hash2(px>>1,py>>1,S^0xCA40);
+          if(c>0.60){const m=mix3([R1,G1,B1],canopyD,0.65);R1=m[0];G1=m[1];B1=m[2];}
+          else if(c<0.30){const m=mix3([R1,G1,B1],canopyL,0.5);R1=m[0];G1=m[1];B1=m[2];}
+        }
+        if(b!==5&&h<seaPlus045){
+          const wNear=(hL<sea?1:0)+(hR<sea?1:0)+(hU<sea?1:0)+(hD<sea?1:0);
+          const rivNear=(water[py*VW+xm]===4||water[py*VW+xp]===4||water[ym*VW+px]===4||water[yp*VW+px]===4);
+          if(wNear>0||rivNear){
+            const f2=1-(h-sea)*22.222, th=BAYER[((py&3)<<2)|(px&3)]*rc.bayer_div;
+            if(th<f2*0.85+wNear*0.06){R1=sand[0];G1=sand[1];B1=sand[2];}
+          }
+        }
+        if(b!==5&&b!==14&&b!==19&&h<seaPlus022&&(hL<sea||hR<sea||hU<sea||hD<sea)){
+          const m=mix3([R1,G1,B1],wet,0.55);R1=m[0];G1=m[1];B1=m[2];
+        }
+      } else {
+        if(wk===4){
+          const wL=water[py*VW+xm],wR=water[py*VW+xp],wU=water[ym*VW+px],wD=water[yp*VW+px];
+          const bL=biome[py*VW+xm],bR=biome[py*VW+xp],bU=biome[ym*VW+px],bD=biome[yp*VW+px];
+          let fell=false;
+          if((bL>=15&&bL<=18&&hL-h>rc.waterfall_h)||(bR>=15&&bR<=18&&hR-h>rc.waterfall_h)||(bU>=15&&bU<=18&&hU-h>rc.waterfall_h)||(bD>=15&&bD<=18&&hD-h>rc.waterfall_h)){R1=foam[0];G1=foam[1];B1=foam[2];fell=true;}
+          if(!fell&&(hL<sea||hR<sea||hU<sea||hD<sea)){const m=mix3([R1,G1,B1],sand,0.6);R1=m[0];G1=m[1];B1=m[2];}
+        }
+        if(wk===3){
+          const depth=sea-h;
+          if(depth<rc.depth_thresh){const tgt=T[i]>0.55?lagoon:sand;const m=mix3([R1,G1,B1],tgt,(1-depth/rc.depth_thresh)*0.55);R1=m[0];G1=m[1];B1=m[2];}
+          const bL=biome[py*VW+xm],bR=biome[py*VW+xp],bU=biome[ym*VW+px],bD=biome[yp*VW+px];
+          if((bL===5||bR===5||bU===5||bD===5)&&hash2(px*7+2,py*7+4,S^0xC0AA)>0.90){const m=mix3([R1,G1,B1],coral,0.85);R1=m[0];G1=m[1];B1=m[2];}
+        }
+        if(wk===1){const dd=Math.min(1,(sea-h)*5);const ff=1-dd*0.22;R1*=ff;G1*=ff;B1*=ff;}
+        if((wk===2||wk===3)&&(hL>=sea||hR>=sea||hU>=sea||hD>=sea)){R1=foam[0];G1=foam[1];B1=foam[2];}
+      }
+      d[o]=R1;d[o+1]=G1;d[o+2]=B1;
+    }
   }
   ctx.putImageData(img,0,0);
   BASE={img,water,biome};

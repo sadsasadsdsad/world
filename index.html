@@ -506,8 +506,22 @@ addEventListener('keydown',e=>{
   if(['s','S','ы','Ы'].includes(e.key))save();
 });
 
-el('seed').value=location.hash.slice(1)||rndSeed();
-generate();
+// Инициализация с обработкой ошибок
+try{
+  el('seed').value=location.hash.slice(1)||rndSeed();
+  generate();
+}catch(err){
+  console.error('Ошибка инициализации:',err);
+  // Принудительная перезагрузка при ошибке
+  setTimeout(()=>{location.reload()},1000);
+}
+
+// Fallback на случай если DOM не готов
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded',()=>{
+    try{generate()}catch(e){console.error('DOM ready error:',e)}
+  });
+}
 </script>
 </body>
 </html>
